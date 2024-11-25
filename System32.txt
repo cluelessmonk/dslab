@@ -1,0 +1,2266 @@
+
+// This code for two process communicating sending string concatenation to each other
+
+
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+
+#define BUFFER_SIZE 256
+
+void concatenate(char *dest, const char *src) {
+    // Concatenate manually without using string functions
+    while (*dest) dest++; // Move to the end of dest
+    while (*src) {
+        *dest = *src; // Append src characters to dest
+        dest++;
+        src++;
+    }
+    *dest = '\0'; // Null-terminate the result
+}
+
+int main() {
+    int pipe1[2], pipe2[2]; // Pipe descriptors
+    pid_t pid;
+    char buffer[BUFFER_SIZE];
+
+    if (pipe(pipe1) == -1 || pipe(pipe2) == -1) {
+        perror("Pipe creation failed");
+        return 1;
+    }
+
+    pid = fork();
+
+    if (pid == -1) {
+        perror("Fork failed");
+        return 1;
+    } else if (pid == 0) {
+        // Child process: receives a string, concatenates, and sends it back
+        close(pipe1[1]); // Close write end of first pipe
+        close(pipe2[0]); // Close read end of second pipe
+
+        // Read the string from the first pipe
+        read(pipe1[0], buffer, BUFFER_SIZE);
+        close(pipe1[0]); // Close read end after use
+
+        // Concatenate manually
+        char additional[] = " from Process 2";
+        concatenate(buffer, additional);
+
+        // Send the concatenated string back through the second pipe
+        write(pipe2[1], buffer, strlen(buffer) + 1);
+        close(pipe2[1]); // Close write end after use
+    } else {
+        // Parent process: sends a string and receives the response
+        close(pipe1[0]); // Close read end of first pipe
+        close(pipe2[1]); // Close write end of second pipe
+
+        // Write the initial string to the first pipe
+        char message[] = "Hello Process 2";
+        write(pipe1[1], message, strlen(message) + 1);
+        close(pipe1[1]); // Close write end after use
+
+        // Read the modified string from the second pipe
+        read(pipe2[0], buffer, BUFFER_SIZE);
+        close(pipe2[0]); // Close read end after use
+
+        // Print the received string
+        printf("Parent received: %s\n", buffer);
+    }
+
+    return 0;
+}
+
+//Matrix addition using pipe -->
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+#define ROWS 3
+#define COLS 3
+
+void add_matrices(int result[ROWS][COLS], int mat1[ROWS][COLS], int mat2[ROWS][COLS]) {
+    for (int i = 0; i < ROWS; i++) {
+        for (int j = 0; j < COLS; j++) {
+            result[i][j] = mat1[i][j] + mat2[i][j];
+        }
+    }
+}
+
+void print_matrix(const char *label, int matrix[ROWS][COLS]) {
+    printf("%s:\n", label);
+    for (int i = 0; i < ROWS; i++) {
+        for (int j = 0; j < COLS; j++) {
+            printf("%d ", matrix[i][j]);
+        }
+        printf("\n");
+    }
+}
+
+int main() {
+    int pipe1[2], pipe2[2];
+    pid_t pid;
+
+    if (pipe(pipe1) == -1 || pipe(pipe2) == -1) {
+        perror("Pipe creation failed");
+        return 1;
+    }
+
+    pid = fork();
+
+    if (pid == -1) {
+        perror("Fork failed");
+        return 1;
+    } else if (pid == 0) {
+        // Child process: Receives matrices, adds them, and sends back the result
+        close(pipe1[1]); // Close write end of pipe1
+        close(pipe2[0]); // Close read end of pipe2
+
+        int mat1[ROWS][COLS], mat2[ROWS][COLS], result[ROWS][COLS];
+
+        // Read matrices from pipe1
+        read(pipe1[0], mat1, sizeof(mat1));
+        read(pipe1[0], mat2, sizeof(mat2));
+        close(pipe1[0]); // Close read end after use
+
+        // Add the matrices
+        add_matrices(result, mat1, mat2);
+
+        // Send the result back through pipe2
+        write(pipe2[1], result, sizeof(result));
+        close(pipe2[1]); // Close write end after use
+
+    } else {
+        // Parent process: Sends matrices and receives the result
+        close(pipe1[0]); // Close read end of pipe1
+        close(pipe2[1]); // Close write end of pipe2
+
+        int mat1[ROWS][COLS] = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}};
+        int mat2[ROWS][COLS] = {{9, 8, 7}, {6, 5, 4}, {3, 2, 1}};
+        int result[ROWS][COLS];
+
+        // Print the input matrices
+        print_matrix("Matrix 1", mat1);
+        print_matrix("Matrix 2", mat2);
+
+        // Write matrices to pipe1
+        write(pipe1[1], mat1, sizeof(mat1));
+        write(pipe1[1], mat2, sizeof(mat2));
+        close(pipe1[1]); // Close write end after use
+
+        // Read the result from pipe2
+        read(pipe2[0], result, sizeof(result));
+        close(pipe2[0]); // Close read end after use
+
+        // Print the resulting matrix
+        print_matrix("Result (Matrix 1 + Matrix 2)", result);
+    }
+
+    return 0;
+}
+
+//NODE A AND NODE B COMMUNICATION SHARING CPU LOAD first compile both program then start node b and then start node a
+
+//NODE B CODE -->
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 1024
+
+// Function to calculate CPU load
+double get_cpu_load() {
+    FILE *fp = fopen("/proc/stat", "r");
+    if (fp == NULL) {
+        perror("Failed to open /proc/stat");
+        return -1.0;
+    }
+
+    char buffer[BUFFER_SIZE];
+    unsigned long long int user, nice, system, idle, iowait, irq, softirq, steal;
+    fgets(buffer, BUFFER_SIZE, fp);
+    sscanf(buffer, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", 
+           &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal);
+    fclose(fp);
+
+    static unsigned long long int prev_total = 0, prev_idle = 0;
+    unsigned long long int total = user + nice + system + idle + iowait + irq + softirq + steal;
+    unsigned long long int idle_diff = idle - prev_idle;
+    unsigned long long int total_diff = total - prev_total;
+
+    prev_idle = idle;
+    prev_total = total;
+
+    return (1.0 - ((double)idle_diff / total_diff)) * 100.0;
+}
+
+int main() {
+    int server_fd, new_socket;
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+    char buffer[BUFFER_SIZE] = {0};
+
+    // Create socket
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Bind to port
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(PORT);
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("Bind failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for connections
+    if (listen(server_fd, 3) < 0) {
+        perror("Listen failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Node B waiting for connection...\n");
+
+    // Accept connection
+    if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t *)&addrlen)) < 0) {
+        perror("Accept failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Send CPU load to Node A
+    double cpu_load = get_cpu_load();
+    sprintf(buffer, "CPU Load: %.2f%%", cpu_load);
+    send(new_socket, buffer, strlen(buffer), 0);
+    printf("Sent CPU Load: %.2f%%\n", cpu_load);
+
+    close(new_socket);
+    close(server_fd);
+    return 0;
+}
+
+//node A code -->
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 1024
+
+int main() {
+    int sock = 0;
+    struct sockaddr_in serv_addr;
+    char buffer[BUFFER_SIZE] = {0};
+
+    // Create socket
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation error");
+        return -1;
+    }
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(PORT);
+
+    // Convert IPv4 and IPv6 addresses from text to binary form
+    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
+        perror("Invalid address/Address not supported");
+        return -1;
+    }
+
+    // Connect to Node B
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        perror("Connection failed");
+        return -1;
+    }
+
+    // Read CPU load from Node B
+    read(sock, buffer, BUFFER_SIZE);
+    printf("Received from Node B: %s\n", buffer);
+
+    close(sock);
+    return 0;
+}
+
+
+
+
+// create a server code for shared memory and incrementing counter -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <semaphore.h>
+#include <sys/types.h>
+
+#define SHARED_MEM_SIZE sizeof(int)
+#define SHARED_MEM_NAME "/shared_mem"
+#define SEMAPHORE_NAME "/sem_counter"
+
+int main() {
+    int *counter;
+    sem_t *semaphore;
+
+    // Create shared memory
+    int shm_fd = shm_open(SHARED_MEM_NAME, O_CREAT | O_RDWR, 0666);
+    if (shm_fd == -1) {
+        perror("Failed to create shared memory");
+        exit(EXIT_FAILURE);
+    }
+
+    // Set the size of the shared memory
+    if (ftruncate(shm_fd, SHARED_MEM_SIZE) == -1) {
+        perror("Failed to set size of shared memory");
+        exit(EXIT_FAILURE);
+    }
+
+    // Map shared memory to process's address space
+    counter = mmap(NULL, SHARED_MEM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (counter == MAP_FAILED) {
+        perror("Failed to map shared memory");
+        exit(EXIT_FAILURE);
+    }
+
+    // Initialize the shared counter
+    *counter = 0;
+
+    // Create or open the semaphore
+    semaphore = sem_open(SEMAPHORE_NAME, O_CREAT, 0666, 1);
+    if (semaphore == SEM_FAILED) {
+        perror("Failed to create semaphore");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server is running. Press Ctrl+C to stop.\n");
+
+    // Loop to increment the counter
+    while (1) {
+        sem_wait(semaphore); // Wait (lock the semaphore)
+        
+        // Critical section
+        (*counter)++;
+        printf("Counter value: %d\n", *counter);
+
+        sem_post(semaphore); // Signal (unlock the semaphore)
+        sleep(1);            // Simulate some work
+    }
+
+    // Cleanup (not reached due to infinite loop, but included for completeness)
+    munmap(counter, SHARED_MEM_SIZE);
+    close(shm_fd);
+    shm_unlink(SHARED_MEM_NAME);
+    sem_close(semaphore);
+    sem_unlink(SEMAPHORE_NAME);
+
+    return 0;
+}
+
+for this do --> gcc -o server server.c -lrt -pthread
+then ./server to run
+
+
+
+// client code for that is -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <semaphore.h>
+#include <unistd.h>
+
+#define SHARED_MEM_NAME "/shared_mem"
+#define SEMAPHORE_NAME "/sem_counter"
+
+int main() {
+    int *counter;
+    sem_t *semaphore;
+
+    // Open the shared memory
+    int shm_fd = shm_open(SHARED_MEM_NAME, O_RDWR, 0666);
+    if (shm_fd == -1) {
+        perror("Failed to open shared memory");
+        exit(EXIT_FAILURE);
+    }
+
+    // Map shared memory to the process's address space
+    counter = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (counter == MAP_FAILED) {
+        perror("Failed to map shared memory");
+        exit(EXIT_FAILURE);
+    }
+
+    // Open the semaphore
+    semaphore = sem_open(SEMAPHORE_NAME, 0);
+    if (semaphore == SEM_FAILED) {
+        perror("Failed to open semaphore");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Client is running. Press Ctrl+C to stop.\n");
+
+    // Loop to read the counter value
+    while (1) {
+        sem_wait(semaphore); // Wait (lock the semaphore)
+
+        // Critical section
+        printf("Counter value read by client: %d\n", *counter);
+
+        sem_post(semaphore); // Signal (unlock the semaphore)
+        sleep(1);            // Simulate some delay
+    }
+
+    // Cleanup (not reached due to infinite loop, but included for completeness)
+    munmap(counter, sizeof(int));
+    close(shm_fd);
+    sem_close(semaphore);
+
+    return 0;
+}
+
+
+// same do it for client 
+
+// server and client communication -->
+server code -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
+#define SERVER_PORT 8080
+#define BUFFER_SIZE 1024
+
+int main() {
+    int sockfd;
+    struct sockaddr_in server_addr, client_addr;
+    char buffer[BUFFER_SIZE];
+    socklen_t client_len = sizeof(client_addr);
+
+    // Create UDP socket
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Configure server address
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(SERVER_PORT);
+
+    // Bind the socket to the port
+    if (bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server is running on port %d...\n", SERVER_PORT);
+
+    // Receive message from client
+    while (1) {
+        memset(buffer, 0, BUFFER_SIZE);
+        int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &client_len);
+        if (n < 0) {
+            perror("Receive failed");
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        buffer[n] = '\0'; // Null-terminate the string
+        printf("Received message from client: %s\n", buffer);
+    }
+
+    // Close socket (not reached due to infinite loop, but included for completeness)
+    close(sockfd);
+    return 0;
+}
+
+client code -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
+#define SERVER_PORT 8080 // Server port
+#define CLIENT_PORT 9090 // Client port
+#define BUFFER_SIZE 1024
+
+int main() {
+    int sockfd;
+    struct sockaddr_in server_addr, client_addr;
+    char buffer[BUFFER_SIZE];
+
+    // Create UDP socket
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Configure client address
+    memset(&client_addr, 0, sizeof(client_addr));
+    client_addr.sin_family = AF_INET;
+    client_addr.sin_addr.s_addr = INADDR_ANY;
+    client_addr.sin_port = htons(CLIENT_PORT);
+
+    // Bind client to a specific port
+    if (bind(sockfd, (const struct sockaddr *)&client_addr, sizeof(client_addr)) < 0) {
+        perror("Bind failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Configure server address
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(SERVER_PORT);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // Localhost
+
+    // Get input from user
+    printf("Enter a message to send to the server: ");
+    fgets(buffer, BUFFER_SIZE, stdin);
+    buffer[strcspn(buffer, "\n")] = '\0'; // Remove newline character
+
+    // Send message to server
+    if (sendto(sockfd, buffer, strlen(buffer), 0, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Send failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Message sent to server: %s\n", buffer);
+
+    // Close socket
+    close(sockfd);
+    return 0;
+}
+
+save it simply and run no need for -ltr -pthread 
+
+
+
+// Client and server message passing interface remote computation -->
+server-->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 1024
+
+void compute_sum(int *array, int size, int *result) {
+    *result = 0;
+    for (int i = 0; i < size; i++) {
+        *result += array[i];
+    }
+}
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    int buffer[BUFFER_SIZE];
+    int result;
+
+    // Create socket
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Configure server address
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+
+    // Bind socket to the address
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Start listening for connections
+    if (listen(server_fd, 3) < 0) {
+        perror("Listen failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server is listening on port %d...\n", PORT);
+
+    // Accept client connection
+    if ((client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &addr_len)) < 0) {
+        perror("Accept failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Receive array from client
+    int size;
+    recv(client_fd, &size, sizeof(int), 0); // Receive size of array
+    recv(client_fd, buffer, size * sizeof(int), 0); // Receive array elements
+
+    printf("Received array of size %d from client\n", size);
+
+    // Perform computation
+    compute_sum(buffer, size, &result);
+    printf("Computed sum: %d\n", result);
+
+    // Send result back to client
+    send(client_fd, &result, sizeof(int), 0);
+
+    // Close connections
+    close(client_fd);
+    close(server_fd);
+    return 0;
+}
+
+client-->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 1024
+
+int main() {
+    int sockfd;
+    struct sockaddr_in server_addr;
+    int buffer[BUFFER_SIZE];
+    int result;
+
+    // Create socket
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Configure server address
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+
+    // Convert IP address from text to binary form
+    if (inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0) {
+        perror("Invalid address/ Address not supported");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Connect to server
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection to server failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Prepare data to send
+    int size = 5;
+    int array[] = {1, 2, 3, 4, 5};
+
+    // Send size of array
+    send(sockfd, &size, sizeof(int), 0);
+
+    // Send array
+    send(sockfd, array, size * sizeof(int), 0);
+    printf("Sent array of size %d to server\n", size);
+
+    // Receive computed result from server
+    recv(sockfd, &result, sizeof(int), 0);
+    printf("Received result from server: %d\n", result);
+
+    // Close connection
+    close(sockfd);
+    return 0;
+}
+
+
+Lamports Logical Clock Algorithm -->
+#include <stdio.h>
+
+#define NUM_PROCESSES 3
+#define NUM_EVENTS 5
+
+// Simulate sending and receiving messages
+void lamport_logical_clock() {
+    int logical_clock[NUM_PROCESSES] = {0}; // Logical clocks for each process
+    int events[NUM_PROCESSES][NUM_EVENTS] = {0}; // Event timestamps for each process
+
+    // Simulating a simple sequence of events and messages
+    // Event matrix:
+    // P1: e1 -> e2 -> send -> receive -> e5
+    // P2: e1 -> receive -> e3 -> send -> e5
+    // P3: e1 -> e2 -> e3 -> receive -> e5
+
+    for (int i = 0; i < NUM_EVENTS; i++) {
+        // Increment clock for internal events
+        for (int j = 0; j < NUM_PROCESSES; j++) {
+            logical_clock[j]++;
+            events[j][i] = logical_clock[j];
+        }
+
+        // Simulate message send/receive
+        if (i == 2) { // P1 sends message to P2
+            logical_clock[1] = (logical_clock[0] > logical_clock[1] ? logical_clock[0] : logical_clock[1]) + 1;
+        }
+        if (i == 3) { // P2 receives message from P1
+            logical_clock[1] = (logical_clock[0] > logical_clock[1] ? logical_clock[0] : logical_clock[1]) + 1;
+        }
+    }
+
+    // Print results
+    printf("Lamport's Logical Clocks:\n");
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        printf("Process %d: ", i + 1);
+        for (int j = 0; j < NUM_EVENTS; j++) {
+            printf("%d ", events[i][j]);
+        }
+        printf("\n");
+    }
+}
+
+int main() {
+    lamport_logical_clock();
+    return 0;
+}
+
+
+
+
+vector clock algo -->
+#include <stdio.h>
+#include <string.h>
+
+#define NUM_PROCESSES 3
+#define NUM_EVENTS 5
+
+void update_vector_clock(int local_clock[], int received_clock[], int num_processes) {
+    for (int i = 0; i < num_processes; i++) {
+        local_clock[i] = local_clock[i] > received_clock[i] ? local_clock[i] : received_clock[i];
+    }
+}
+
+void vector_clock() {
+    int vector_clocks[NUM_PROCESSES][NUM_PROCESSES] = {{0}}; // Initialize vector clocks
+
+    // Simulate events
+    for (int i = 0; i < NUM_EVENTS; i++) {
+        for (int j = 0; j < NUM_PROCESSES; j++) {
+            vector_clocks[j][j]++; // Increment local clock
+
+            // Simulate message exchanges
+            if (i == 2 && j == 0) { // P1 sends message to P2
+                update_vector_clock(vector_clocks[1], vector_clocks[0], NUM_PROCESSES);
+            }
+            if (i == 3 && j == 1) { // P2 receives message from P1
+                update_vector_clock(vector_clocks[1], vector_clocks[0], NUM_PROCESSES);
+            }
+        }
+    }
+
+    // Print results
+    printf("Vector Clocks:\n");
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        printf("Process %d: ", i + 1);
+        for (int j = 0; j < NUM_PROCESSES; j++) {
+            printf("%d ", vector_clocks[i][j]);
+        }
+        printf("\n");
+    }
+}
+
+int main() {
+    vector_clock();
+    return 0;
+}
+
+
+
+
+
+Lamport mutual exclusion code -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <unistd.h>
+
+#define NUM_PROCESSES 3
+
+typedef struct {
+    int id;
+    int timestamp;
+    int request_cs; // Requesting critical section
+} Process;
+
+int logical_clock = 0;
+pthread_mutex_t clock_lock;
+
+void increment_logical_clock() {
+    pthread_mutex_lock(&clock_lock);
+    logical_clock++;
+    pthread_mutex_unlock(&clock_lock);
+}
+
+void *process_function(void *arg) {
+    Process *p = (Process *)arg;
+
+    while (1) {
+        sleep(rand() % 5 + 1); // Random delay
+
+        // Request critical section
+        pthread_mutex_lock(&clock_lock);
+        p->timestamp = ++logical_clock;
+        p->request_cs = 1;
+        printf("Process %d: Requesting CS at time %d\n", p->id, p->timestamp);
+        pthread_mutex_unlock(&clock_lock);
+
+        // Simulate receiving acknowledgments from all other processes
+        printf("Process %d: Entering CS at time %d\n", p->id, logical_clock);
+        sleep(2); // Simulate CS execution
+
+        // Exit critical section
+        pthread_mutex_lock(&clock_lock);
+        printf("Process %d: Exiting CS at time %d\n", p->id, logical_clock);
+        p->request_cs = 0;
+        pthread_mutex_unlock(&clock_lock);
+    }
+
+    return NULL;
+}
+
+int main() {
+    pthread_t threads[NUM_PROCESSES];
+    Process processes[NUM_PROCESSES];
+    pthread_mutex_init(&clock_lock, NULL);
+
+    // Initialize processes
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        processes[i].id = i + 1;
+        processes[i].timestamp = 0;
+        processes[i].request_cs = 0;
+        pthread_create(&threads[i], NULL, process_function, &processes[i]);
+    }
+
+    // Join threads
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    pthread_mutex_destroy(&clock_lock);
+    return 0;
+}
+
+run only do -lpthread in back 
+
+
+ricart - agrawala mutual exclusion code -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <unistd.h>
+
+#define NUM_PROCESSES 3
+
+typedef struct {
+    int id;
+    int timestamp;
+    int request_cs;
+    int reply_count;
+} Process;
+
+int logical_clock = 0;
+pthread_mutex_t clock_lock;
+
+void increment_logical_clock() {
+    pthread_mutex_lock(&clock_lock);
+    logical_clock++;
+    pthread_mutex_unlock(&clock_lock);
+}
+
+void *process_function(void *arg) {
+    Process *p = (Process *)arg;
+
+    while (1) {
+        sleep(rand() % 5 + 1); // Random delay
+
+        // Request critical section
+        pthread_mutex_lock(&clock_lock);
+        p->timestamp = ++logical_clock;
+        p->request_cs = 1;
+        p->reply_count = 0;
+        printf("Process %d: Requesting CS at time %d\n", p->id, p->timestamp);
+        pthread_mutex_unlock(&clock_lock);
+
+        // Simulate receiving replies from all other processes
+        pthread_mutex_lock(&clock_lock);
+        p->reply_count = NUM_PROCESSES - 1;
+        if (p->reply_count == NUM_PROCESSES - 1) {
+            printf("Process %d: Entering CS at time %d\n", p->id, logical_clock);
+            sleep(2); // Simulate CS execution
+            printf("Process %d: Exiting CS at time %d\n", p->id, logical_clock);
+            p->request_cs = 0;
+        }
+        pthread_mutex_unlock(&clock_lock);
+    }
+
+    return NULL;
+}
+
+int main() {
+    pthread_t threads[NUM_PROCESSES];
+    Process processes[NUM_PROCESSES];
+    pthread_mutex_init(&clock_lock, NULL);
+
+    // Initialize processes
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        processes[i].id = i + 1;
+        processes[i].timestamp = 0;
+        processes[i].request_cs = 0;
+        processes[i].reply_count = 0;
+        pthread_create(&threads[i], NULL, process_function, &processes[i]);
+    }
+
+    // Join threads
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    pthread_mutex_destroy(&clock_lock);
+    return 0;
+}
+
+
+
+
+//server client socket communication-->
+client-->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+int main() {
+    int sockfd;
+    struct sockaddr_in server_addr;
+    int num;
+    long long result;
+
+    // Create socket
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = 8080;
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    // Connect to server
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Input number from user
+    printf("Enter a number to calculate its factorial: ");
+    scanf("%d", &num);
+
+    // Send number to server
+    send(sockfd, &num, sizeof(num), 0);
+
+    // Receive factorial result from server
+    recv(sockfd, &result, sizeof(result), 0);
+    printf("Received factorial: %lld\n", result);
+
+    // Close socket
+    close(sockfd);
+
+    return 0;
+}
+
+server -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+// Function to calculate factorial
+long long factorial(int n) {
+    if (n == 0 || n == 1) {
+        return 1;
+    }
+    long long result = 1;
+    for (int i = 2; i <= n; i++) {
+        result *= i;
+    }
+    return result;
+}
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_size;
+    int num;
+
+    // Create socket
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = 8080;
+
+    // Bind the socket
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for incoming connections
+    if (listen(server_fd, 5) == 0) {
+        printf("Server listening on port 8080...\n");
+    } else {
+        perror("Listen failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    addr_size = sizeof(client_addr);
+    // Accept the incoming connection
+    if ((client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &addr_size)) < 0) {
+        perror("Accept failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Receive number from client
+    recv(client_fd, &num, sizeof(num), 0);
+    printf("Server received number: %d\n", num);
+
+    // Calculate factorial
+    long long result = factorial(num);
+
+    // Send the result (factorial) back to client
+    send(client_fd, &result, sizeof(result), 0);
+    printf("Server sent factorial: %lld\n", result);
+
+    // Close the sockets
+    close(client_fd);
+    close(server_fd);
+
+    return 0;
+}
+
+
+
+// client server date time cpu load -->
+client-->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+int main() {
+    int sockfd;
+    struct sockaddr_in server_addr;
+    char buffer[512];
+
+    // Create socket
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(8080);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    // Connect to server
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Receive response from server
+    recv(sockfd, buffer, sizeof(buffer), 0);
+    printf("Received from server:\n%s\n", buffer);
+
+    // Close socket
+    close(sockfd);
+
+    return 0;
+}
+
+
+//server-->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/sysinfo.h>
+#include <time.h>
+
+// Function to get current date and time
+void get_datetime(char *buffer, size_t buffer_size) {
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    strftime(buffer, buffer_size, "%Y-%m-%d %H:%M:%S", tm_info);
+}
+
+// Function to get CPU load percentage
+float get_cpu_load() {
+    FILE *fp = fopen("/proc/stat", "r");
+    if (!fp) {
+        perror("Could not open /proc/stat");
+        return -1.0;
+    }
+
+    char buffer[256];
+    unsigned long long user, nice, system, idle, iowait, irq, softirq, steal;
+    unsigned long long total1, total2, idle1, idle2;
+
+    // First read
+    fgets(buffer, sizeof(buffer), fp);
+    sscanf(buffer, "cpu  %llu %llu %llu %llu %llu %llu %llu %llu",
+           &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal);
+    total1 = user + nice + system + idle + iowait + irq + softirq + steal;
+    idle1 = idle + iowait;
+
+    fclose(fp);
+    usleep(100000); // Sleep for 100ms
+
+    // Second read
+    fp = fopen("/proc/stat", "r");
+    if (!fp) {
+        perror("Could not open /proc/stat");
+        return -1.0;
+    }
+
+    fgets(buffer, sizeof(buffer), fp);
+    sscanf(buffer, "cpu  %llu %llu %llu %llu %llu %llu %llu %llu",
+           &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal);
+    total2 = user + nice + system + idle + iowait + irq + softirq + steal;
+    idle2 = idle + iowait;
+
+    fclose(fp);
+
+    return 100.0 * (1.0 - ((double)(idle2 - idle1) / (total2 - total1)));
+}
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_size;
+    char buffer[512];
+
+    // Create socket
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(8080);
+
+    // Bind the socket
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for incoming connections
+    if (listen(server_fd, 5) < 0) {
+        perror("Listen failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server is listening on port 8080...\n");
+
+    addr_size = sizeof(client_addr);
+    while (1) {
+        // Accept incoming connection
+        client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &addr_size);
+        if (client_fd < 0) {
+            perror("Accept failed");
+            continue;
+        }
+
+        // Get date-time
+        char datetime[64];
+        get_datetime(datetime, sizeof(datetime));
+
+        // Get CPU load
+        float cpu_load = get_cpu_load();
+
+        // Format response
+        snprintf(buffer, sizeof(buffer), "Date-Time: %s\nCPU Load: %.2f%%\n", datetime, cpu_load);
+        printf("Sending to client:\n%s", buffer);
+
+        // Send response to client
+        send(client_fd, buffer, strlen(buffer), 0);
+
+        // Close client connection
+        close(client_fd);
+    }
+
+    close(server_fd);
+    return 0;
+}
+
+
+//mapreduce code -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <pwd.h>
+
+// Define a structure to hold file information
+typedef struct {
+    char filename[256];
+    char username[256];
+    off_t filesize;
+} FileInfo;
+
+// Function to get the username from the UID
+void get_username(uid_t uid, char *username) {
+    struct passwd *pw = getpwuid(uid);
+    if (pw) {
+        strcpy(username, pw->pw_name);
+    } else {
+        strcpy(username, "unknown");
+    }
+}
+
+// Map function: Reads files in the directory and stores their metadata
+int map_files(const char *directory, FileInfo **file_list) {
+    DIR *dir;
+    struct dirent *entry;
+    struct stat file_stat;
+    char filepath[1024];
+    int count = 0;
+
+    dir = opendir(directory);
+    if (!dir) {
+        perror("Could not open directory");
+        exit(EXIT_FAILURE);
+    }
+
+    // Allocate memory for file information
+    *file_list = malloc(1000 * sizeof(FileInfo)); // Adjust size as needed
+    if (!*file_list) {
+        perror("Memory allocation failed");
+        closedir(dir);
+        exit(EXIT_FAILURE);
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        // Skip directories
+        if (entry->d_type == DT_DIR) {
+            continue;
+        }
+
+        // Construct full file path
+        snprintf(filepath, sizeof(filepath), "%s/%s", directory, entry->d_name);
+
+        // Get file statistics
+        if (stat(filepath, &file_stat) == -1) {
+            perror("Could not get file stats");
+            continue;
+        }
+
+        // Store file information
+        strcpy((*file_list)[count].filename, entry->d_name);
+        get_username(file_stat.st_uid, (*file_list)[count].username);
+        (*file_list)[count].filesize = file_stat.st_size;
+        count++;
+    }
+
+    closedir(dir);
+    return count; // Return number of files processed
+}
+
+// Reduce function: Finds the maximum file size and associated users
+void reduce_files(FileInfo *file_list, int file_count) {
+    off_t max_size = 0;
+
+    // Find the maximum file size
+    for (int i = 0; i < file_count; i++) {
+        if (file_list[i].filesize > max_size) {
+            max_size = file_list[i].filesize;
+        }
+    }
+
+    // Print files and users with the maximum file size
+    printf("Files with maximum size (%ld bytes):\n", max_size);
+    for (int i = 0; i < file_count; i++) {
+        if (file_list[i].filesize == max_size) {
+            printf("File: %s, Owner: %s\n", file_list[i].filename, file_list[i].username);
+        }
+    }
+}
+
+int main() {
+    FileInfo *file_list = NULL;
+    int file_count;
+
+    // Perform the map phase
+    file_count = map_files(".", &file_list);
+    if (file_count == 0) {
+        printf("No files found in the directory.\n");
+        free(file_list);
+        return 0;
+    }
+
+    // Perform the reduce phase
+    reduce_files(file_list, file_count);
+
+    // Clean up
+    free(file_list);
+    return 0;
+}
+
+
+
+
+// load balancer programme -->
+lb-->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define BUFFER_SIZE 512
+
+// Function to get the CPU load from a server
+float get_cpu_load(const char *ip, int port) {
+    int sockfd;
+    struct sockaddr_in server_addr;
+    char buffer[BUFFER_SIZE];
+
+    // Create socket
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        return -1.0;
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = inet_addr(ip);
+
+    // Connect to the server
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection to server failed");
+        close(sockfd);
+        return -1.0;
+    }
+
+    // Request CPU load
+    send(sockfd, "CPU_LOAD", strlen("CPU_LOAD"), 0);
+    recv(sockfd, buffer, BUFFER_SIZE, 0);
+
+    close(sockfd);
+    return atof(buffer); // Convert response to float
+}
+
+// Function to send the string to the selected server for processing
+void process_string(const char *ip, int port, const char *input, char *output) {
+    int sockfd;
+    struct sockaddr_in server_addr;
+
+    // Create socket
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        strcpy(output, "ERROR");
+        return;
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = inet_addr(ip);
+
+    // Connect to the server
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection to server failed");
+        close(sockfd);
+        strcpy(output, "ERROR");
+        return;
+    }
+
+    // Send the string to the server
+    send(sockfd, input, strlen(input), 0);
+
+    // Receive the response
+    recv(sockfd, output, BUFFER_SIZE, 0);
+
+    close(sockfd);
+}
+
+int main() {
+    int client_sock, load_balancer_sock;
+    struct sockaddr_in client_addr, load_balancer_addr;
+    socklen_t addr_len;
+    char buffer[BUFFER_SIZE], response[BUFFER_SIZE];
+    float cpu_load_server1, cpu_load_server2;
+
+    // Server details
+    const char *server1_ip = "127.0.0.1";
+    const char *server2_ip = "127.0.0.1";
+    int server1_port = 8081;
+    int server2_port = 8082;
+
+    // Create socket for the load balancer
+    if ((load_balancer_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    load_balancer_addr.sin_family = AF_INET;
+    load_balancer_addr.sin_port = htons(8080); // Port for load balancer
+    load_balancer_addr.sin_addr.s_addr = INADDR_ANY;
+
+    // Bind the socket
+    if (bind(load_balancer_sock, (struct sockaddr *)&load_balancer_addr, sizeof(load_balancer_addr)) < 0) {
+        perror("Bind failed");
+        close(load_balancer_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for incoming connections
+    if (listen(load_balancer_sock, 5) < 0) {
+        perror("Listen failed");
+        close(load_balancer_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Load balancer running on port 8080...\n");
+
+    while (1) {
+        addr_len = sizeof(client_addr);
+        // Accept a connection from a client
+        client_sock = accept(load_balancer_sock, (struct sockaddr *)&client_addr, &addr_len);
+        if (client_sock < 0) {
+            perror("Accept failed");
+            continue;
+        }
+
+        // Receive the string from the client
+        memset(buffer, 0, BUFFER_SIZE);
+        recv(client_sock, buffer, BUFFER_SIZE, 0);
+        printf("Received string from client: %s\n", buffer);
+
+        // Get CPU loads of both servers
+        cpu_load_server1 = get_cpu_load(server1_ip, server1_port);
+        cpu_load_server2 = get_cpu_load(server2_ip, server2_port);
+
+        printf("CPU Load: Server1 = %.2f%%, Server2 = %.2f%%\n", cpu_load_server1, cpu_load_server2);
+
+        // Choose the server with lower CPU load
+        int target_server_port = (cpu_load_server1 <= cpu_load_server2) ? server1_port : server2_port;
+        const char *target_server_ip = (cpu_load_server1 <= cpu_load_server2) ? server1_ip : server2_ip;
+
+        // Send the string to the selected server and get the result
+        memset(response, 0, BUFFER_SIZE);
+        process_string(target_server_ip, target_server_port, buffer, response);
+
+        // Send the result back to the client
+        send(client_sock, response, strlen(response), 0);
+        printf("Sent response to client: %s\n", response);
+
+        // Close the client socket
+        close(client_sock);
+    }
+
+    close(load_balancer_sock);
+    return 0;
+}
+
+
+
+//server code -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <ctype.h>
+#include <arpa/inet.h>
+
+#define BUFFER_SIZE 512
+
+// Function to convert a string to lowercase
+void to_lowercase(char *str) {
+    for (int i = 0; str[i]; i++) {
+        str[i] = tolower(str[i]);
+    }
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("Usage: %s <port> <cpu_load>\n", argv[0]);
+        return 1;
+    }
+
+    int port = atoi(argv[1]);
+    float cpu_load = atof(argv[2]);
+    int server_sock, client_sock;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_len;
+    char buffer[BUFFER_SIZE];
+
+    // Create socket
+    if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+
+    // Bind the socket
+    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for connections
+    if (listen(server_sock, 5) < 0) {
+        perror("Listen failed");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server running on port %d with CPU load %.2f%%...\n", port, cpu_load);
+
+    while (1) {
+        addr_len = sizeof(client_addr);
+        client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &addr_len);
+        if (client_sock < 0) {
+            perror("Accept failed");
+            continue;
+        }
+
+        memset(buffer, 0, BUFFER_SIZE);
+        recv(client_sock, buffer, BUFFER_SIZE, 0);
+
+        if (strcmp(buffer, "CPU_LOAD") == 0) {
+            // Respond with CPU load
+            snprintf(buffer, BUFFER_SIZE, "%.2f", cpu_load);
+        } else {
+            // Convert string to lowercase
+            to_lowercase(buffer);
+        }
+
+        send(client_sock, buffer, strlen(buffer), 0);
+        close(client_sock);
+    }
+
+    close(server_sock);
+    return 0;
+}
+
+
+gcc kro normally and then to run specify the port and cpu load value as /server1 8080 20
+
+
+/client code -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define BUFFER_SIZE 512
+
+int main(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("Usage: %s <load_balancer_ip> <load_balancer_port>\n", argv[0]);
+        return 1;
+    }
+
+    const char *load_balancer_ip = argv[1];
+    int load_balancer_port = atoi(argv[2]);
+    int client_sock;
+    struct sockaddr_in server_addr;
+    char buffer[BUFFER_SIZE];
+
+    // Create socket
+    if ((client_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(load_balancer_port);
+    server_addr.sin_addr.s_addr = inet_addr(load_balancer_ip);
+
+    // Connect to the load balancer
+    if (connect(client_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection to load balancer failed");
+        close(client_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Input string from the user
+    printf("Enter a string to send to the load balancer: ");
+    fgets(buffer, BUFFER_SIZE, stdin);
+    buffer[strcspn(buffer, "\n")] = '\0'; // Remove newline character
+
+    // Send the string to the load balancer
+    send(client_sock, buffer, strlen(buffer), 0);
+
+    // Receive the processed string from the load balancer
+    memset(buffer, 0, BUFFER_SIZE);
+    recv(client_sock, buffer, BUFFER_SIZE, 0);
+    printf("Processed string from server: %s\n", buffer);
+
+    // Close the connection
+    close(client_sock);
+    return 0;
+}
+
+isko aise run kro ./client 127.0.0.1 8080
+
+
+
+
+//java client -->
+import java.io.*;
+import java.net.*;
+
+public class c {
+    public static void main(String[] args) {
+        String hostname = "localhost";
+        int port = 9000;
+
+        try (Socket socket = new Socket(hostname, port)) {
+            OutputStream output = socket.getOutputStream();
+            PrintWriter writer = new PrintWriter(output, true);
+
+            InputStream input = socket.getInputStream();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(input));
+
+            // Send strings to the server
+            BufferedReader consoleReader = new BufferedReader(new InputStreamReader(System.in));
+            String text;
+
+            System.out.println("Enter text (type 'exit' to quit):");
+            while (true) {
+                text = consoleReader.readLine();
+
+                if (text.equalsIgnoreCase("exit")) {
+                    break;
+                }
+
+                writer.println(text); // Send to server
+                String response = reader.readLine(); // Receive from server
+                System.out.println("Server responded: " + response);
+            }
+        } catch (UnknownHostException ex) {
+            System.out.println("Server not found: " + ex.getMessage());
+        } catch (IOException ex) {
+            System.out.println("I/O error: " + ex.getMessage());
+        }
+    }
+}
+
+
+
+//java server -->
+import java.io.*;
+import java.net.*;
+
+public class s {
+    public static void main(String[] args) {
+        int port = 9000; // Server port
+        try (ServerSocket serverSocket = new ServerSocket(port)) {
+            System.out.println("Server is listening on port " + port);
+
+            while (true) {
+                Socket socket = serverSocket.accept();
+                System.out.println("New client connected");
+
+                // Handle client request in a separate thread
+                new ClientHandler(socket).start();
+            }
+        } catch (IOException ex) {
+            System.out.println("Server exception: " + ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+}
+
+class ClientHandler extends Thread {
+    private Socket socket;
+
+    public ClientHandler(Socket socket) {
+        this.socket = socket;
+    }
+
+    @Override
+    public void run() {
+        try (
+            InputStream input = socket.getInputStream();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(input));
+            OutputStream output = socket.getOutputStream();
+            PrintWriter writer = new PrintWriter(output, true)
+        ) {
+            String text;
+            while ((text = reader.readLine()) != null) {
+                System.out.println("Received from client: " + text);
+                String upperText = text.toUpperCase();
+                System.out.println("Sending to client: " + upperText);
+                writer.println(upperText);
+            }
+        } catch (IOException ex) {
+            System.out.println("Server exception: " + ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+}
+
+
+//shared memory -->
+client -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>    // For O_CREAT, O_EXCL
+#include <sys/mman.h> // For mmap, shm_open
+#include <sys/stat.h> // For mode constants
+#include <unistd.h>   // For close
+#include <semaphore.h>
+
+#define SHARED_MEM_NAME "/shared_mem_example"
+#define SEMAPHORE_NAME "/semaphore_example"
+#define SHARED_MEM_SIZE sizeof(int)
+
+int main() {
+    int shm_fd;           // Shared memory file descriptor
+    int *shared_counter;  // Pointer to shared memory
+    sem_t *sem;           // Semaphore
+
+    // Open existing shared memory
+    shm_fd = shm_open(SHARED_MEM_NAME, O_RDWR, 0666);
+    if (shm_fd == -1) {
+        perror("Failed to open shared memory");
+        exit(EXIT_FAILURE);
+    }
+
+    // Map shared memory into process address space
+    shared_counter = mmap(0, SHARED_MEM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (shared_counter == MAP_FAILED) {
+        perror("Failed to map shared memory");
+        close(shm_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Open existing semaphore
+    sem = sem_open(SEMAPHORE_NAME, 0);
+    if (sem == SEM_FAILED) {
+        perror("Failed to open semaphore");
+        munmap(shared_counter, SHARED_MEM_SIZE);
+        close(shm_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Client is running. Reading counter value...\n");
+
+    // Synchronize access using semaphore
+    sem_wait(sem); // Wait (decrement semaphore)
+
+    // Critical section: Read shared counter
+    printf("Counter value: %d\n", *shared_counter);
+
+    sem_post(sem); // Signal (increment semaphore)
+
+    // Clean up resources
+    munmap(shared_counter, SHARED_MEM_SIZE);
+    close(shm_fd);
+    sem_close(sem);
+
+    return 0;
+}
+
+
+
+
+//gcc -o client_shared_memory client_shared_memory.c -lrt -pthread
+// ./server_shared_memory
+// ./client_shared_memory
+
+
+server-->
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>    // For O_CREAT, O_EXCL
+#include <sys/mman.h> // For mmap, shm_open
+#include <sys/stat.h> // For mode constants
+#include <unistd.h>   // For ftruncate
+#include <semaphore.h>
+
+#define SHARED_MEM_NAME "/shared_mem_example"
+#define SEMAPHORE_NAME "/semaphore_example"
+#define SHARED_MEM_SIZE sizeof(int)
+
+int main() {
+    int shm_fd;               // Shared memory file descriptor
+    int *shared_counter;      // Pointer to shared memory
+    sem_t *sem;               // Semaphore
+    int increment_times = 10; // Number of increments
+
+    // Create and initialize shared memory
+    shm_fd = shm_open(SHARED_MEM_NAME, O_CREAT | O_RDWR, 0666);
+    if (shm_fd == -1) {
+        perror("Failed to create shared memory");
+        exit(EXIT_FAILURE);
+    }
+
+    // Set the size of the shared memory
+    if (ftruncate(shm_fd, SHARED_MEM_SIZE) == -1) {
+        perror("Failed to set size of shared memory");
+        exit(EXIT_FAILURE);
+    }
+
+    // Map shared memory to process address space
+    shared_counter = mmap(0, SHARED_MEM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (shared_counter == MAP_FAILED) {
+        perror("Failed to map shared memory");
+        exit(EXIT_FAILURE);
+    }
+
+    // Initialize the shared counter to 0
+    *shared_counter = 0;
+
+    // Create and initialize semaphore
+    sem = sem_open(SEMAPHORE_NAME, O_CREAT, 0666, 1); // Initial value of semaphore is 1
+    if (sem == SEM_FAILED) {
+        perror("Failed to create semaphore");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server is running. Incrementing counter %d times...\n", increment_times);
+
+    for (int i = 0; i < increment_times; i++) {
+        // Wait (decrement) semaphore
+        sem_wait(sem);
+
+        // Critical section: increment shared counter
+        (*shared_counter)++;
+        printf("Counter incremented to: %d\n", *shared_counter);
+
+        // Signal (increment) semaphore
+        sem_post(sem);
+
+        // Simulate some work
+        sleep(1);
+    }
+
+    printf("Final counter value: %d\n", *shared_counter);
+
+    // Clean up resources
+    munmap(shared_counter, SHARED_MEM_SIZE);
+    close(shm_fd);
+    shm_unlink(SHARED_MEM_NAME); // Remove shared memory
+    sem_close(sem);
+    sem_unlink(SEMAPHORE_NAME);  // Remove semaphore
+
+    return 0;
+}
+
+
+
+//gcc -o server_shared_memory server_shared_memory.c -lrt -pthread
+//./server_shared_memory
+
+
+
+//lamport and vector combined clock simulation-->
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_PROCESSES 5
+#define MAX_EVENTS 10
+
+// Function to display a vector clock
+void display_vector_clock(int vc[], int n) {
+    printf("[");
+    for (int i = 0; i < n; i++) {
+        printf("%d", vc[i]);
+        if (i < n - 1) {
+            printf(", ");
+        }
+    }
+    printf("]\n");
+}
+
+// Lamport Logical Clock Simulation
+void lamport_logical_clock() {
+    int logical_clock[MAX_PROCESSES] = {0};
+    int num_processes;
+
+    printf("Enter the number of processes: ");
+    scanf("%d", &num_processes);
+
+    int event_matrix[MAX_PROCESSES][MAX_EVENTS];
+    printf("Enter the event matrix (%d x %d) (use -1 for no event):\n", num_processes, MAX_EVENTS);
+    for (int i = 0; i < num_processes; i++) {
+        for (int j = 0; j < MAX_EVENTS; j++) {
+            scanf("%d", &event_matrix[i][j]);
+        }
+    }
+
+    printf("\nSimulating Lamport Logical Clock:\n");
+    for (int i = 0; i < num_processes; i++) {
+        printf("Process %d: ", i);
+        for (int j = 0; j < MAX_EVENTS && event_matrix[i][j] != -1; j++) {
+            logical_clock[i]++;
+            if (event_matrix[i][j] != 0) {
+                int sender = event_matrix[i][j] - 1;
+                if (logical_clock[i] <= logical_clock[sender]) {
+                    logical_clock[i] = logical_clock[sender] + 1;
+                }
+            }
+            printf("%d ", logical_clock[i]);
+        }
+        printf("\n");
+    }
+}
+
+// Vector Clock Simulation
+void vector_clock_simulation() {
+    int vector_clocks[MAX_PROCESSES][MAX_PROCESSES] = {0};
+    int num_processes, num_events;
+
+    printf("\nEnter the number of processes: ");
+    scanf("%d", &num_processes);
+    printf("Enter the number of events per process: ");
+    scanf("%d", &num_events);
+
+    printf("\nSimulating Vector Clock:\n");
+    for (int i = 0; i < num_processes; i++) {
+        printf("Process %d:\n", i);
+        for (int j = 0; j < num_events; j++) {
+            // Local event
+            vector_clocks[i][i]++;
+
+            // Display vector clock
+            printf("Event %d: ", j + 1);
+            display_vector_clock(vector_clocks[i], num_processes);
+
+            // Simulate message send/receive
+            if (j % 2 == 0 && i < num_processes - 1) {
+                int receiver = i + 1;
+                printf("Message sent from Process %d to Process %d\n", i, receiver);
+                for (int k = 0; k < num_processes; k++) {
+                    if (vector_clocks[i][k] > vector_clocks[receiver][k]) {
+                        vector_clocks[receiver][k] = vector_clocks[i][k];
+                    }
+                }
+                vector_clocks[receiver][receiver]++;
+                printf("Updated clock for Process %d: ", receiver);
+                display_vector_clock(vector_clocks[receiver], num_processes);
+            }
+        }
+    }
+}
+
+int main() {
+    printf("Choose the clock synchronization method:\n");
+    printf("1. Lamport Logical Clock\n");
+    printf("2. Vector Clock\n");
+    printf("Enter your choice: ");
+
+    int choice;
+    scanf("%d", &choice);
+
+    switch (choice) {
+        case 1:
+            lamport_logical_clock();
+            break;
+        case 2:
+            vector_clock_simulation();
+            break;
+        default:
+            printf("Invalid choice!\n");
+    }
+
+    return 0;
+}
+
+
+//ricart and lamport mutual exclusion -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+
+#define MAX_PROCESSES 10
+
+typedef struct {
+    int process_id;
+    int timestamp;
+} Request;
+
+typedef struct {
+    int process_id;
+    int logical_clock;
+    bool in_critical_section;
+    int total_processes;
+    int responses_received;
+    Request request_queue[MAX_PROCESSES];
+    int queue_count;
+} Process;
+
+// Function to increment the logical clock
+void increment_clock(Process *process) {
+    process->logical_clock++;
+}
+
+// Function to update the logical clock based on the incoming timestamp
+void update_clock(Process *process, int incoming_timestamp) {
+    if (incoming_timestamp > process->logical_clock) {
+        process->logical_clock = incoming_timestamp;
+    }
+    increment_clock(process);
+}
+
+// Function to handle incoming request
+void handle_request(Process *process, Request incoming_request) {
+    update_clock(process, incoming_request.timestamp);
+
+    // Decide whether to queue the request or grant permission
+    if (process->in_critical_section || 
+        (process->logical_clock < incoming_request.timestamp) || 
+        (process->logical_clock == incoming_request.timestamp && process->process_id < incoming_request.process_id)) {
+        printf("Process %d: Adding request from Process %d to queue.\n", process->process_id, incoming_request.process_id);
+        process->request_queue[process->queue_count++] = incoming_request;
+    } else {
+        printf("Process %d: Granting permission to Process %d.\n", process->process_id, incoming_request.process_id);
+        process->responses_received++;
+    }
+}
+
+// Function to request critical section access
+void request_critical_section(Process *process) {
+    increment_clock(process);
+    printf("Process %d: Requesting critical section at timestamp %d.\n", process->process_id, process->logical_clock);
+    process->responses_received = 0;
+
+    // Simulate sending requests to all other processes
+    for (int i = 0; i < process->total_processes; i++) {
+        if (i != process->process_id) {
+            printf("Process %d: Sending request to Process %d.\n", process->process_id, i);
+        }
+    }
+}
+
+// Function to release critical section
+void release_critical_section(Process *process) {
+    process->in_critical_section = false;
+    printf("Process %d: Releasing critical section.\n", process->process_id);
+
+    // Grant permission to queued requests
+    for (int i = 0; i < process->queue_count; i++) {
+        printf("Process %d: Granting permission to Process %d from queue.\n", process->process_id, process->request_queue[i].process_id);
+    }
+
+    process->queue_count = 0;
+}
+
+int main() {
+    int choice;
+    Process processes[MAX_PROCESSES];
+    int total_processes;
+
+    printf("Enter the total number of processes: ");
+    scanf("%d", &total_processes);
+
+    if (total_processes > MAX_PROCESSES) {
+        printf("Error: Maximum number of processes is %d.\n", MAX_PROCESSES);
+        return 1;
+    }
+
+    // Initialize processes
+    for (int i = 0; i < total_processes; i++) {
+        processes[i].process_id = i;
+        processes[i].logical_clock = 0;
+        processes[i].in_critical_section = false;
+        processes[i].total_processes = total_processes;
+        processes[i].responses_received = 0;
+        processes[i].queue_count = 0;
+    }
+
+    printf("Choose algorithm for simulation:\n");
+    printf("1. Lamport's Algorithm\n");
+    printf("2. Ricart-Agrawala Algorithm\n");
+    printf("Enter your choice: ");
+    scanf("%d", &choice);
+
+    switch (choice) {
+        case 1:
+            printf("\nSimulating Lamport's Algorithm:\n");
+            request_critical_section(&processes[0]);
+            handle_request(&processes[1], (Request){0, processes[0].logical_clock});
+            handle_request(&processes[2], (Request){0, processes[0].logical_clock});
+            processes[0].in_critical_section = true;
+            release_critical_section(&processes[0]);
+            break;
+
+        case 2:
+            printf("\nSimulating Ricart-Agrawala Algorithm:\n");
+            request_critical_section(&processes[0]);
+            handle_request(&processes[1], (Request){0, processes[0].logical_clock});
+            handle_request(&processes[2], (Request){0, processes[0].logical_clock});
+            processes[0].in_critical_section = true;
+            release_critical_section(&processes[0]);
+            break;
+
+        default:
+            printf("Invalid choice!\n");
+            break;
+    }
+
+    return 0;
+}
+
+
+//string pipe code -->
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
+#define BUFFER_SIZE 1024
+
+// Function to manually concatenate two strings without using string library functions
+void manual_concatenate(char *dest, const char *src) {
+    // Find the end of the first string
+    while (*dest) {
+        dest++;
+    }
+    // Append the second string
+    while (*src) {
+        *dest = *src;
+        dest++;
+        src++;
+    }
+    // Null-terminate the resulting string
+    *dest = '\0';
+}
+
+int main() {
+    int pipe1[2], pipe2[2]; // Two pipes: pipe1 for parent->child, pipe2 for child->parent
+    pid_t pid;
+    char buffer[BUFFER_SIZE];
+    char additional_string[] = " - Concatenated by Process 2";
+
+    // Create pipe1
+    if (pipe(pipe1) == -1) {
+        perror("Pipe1 creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Create pipe2
+    if (pipe(pipe2) == -1) {
+        perror("Pipe2 creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Create child process
+    pid = fork();
+    if (pid < 0) {
+        perror("Fork failed");
+        exit(EXIT_FAILURE);
+    }
+
+    if (pid > 0) {
+        // Parent Process (Process 1)
+        close(pipe1[0]); // Close reading end of pipe1
+        close(pipe2[1]); // Close writing end of pipe2
+
+        // Get input string from user
+        printf("Process 1: Enter a string: ");
+        fgets(buffer, BUFFER_SIZE, stdin);
+        buffer[strcspn(buffer, "\n")] = '\0'; // Remove newline character
+
+        // Send string to Process 2 via pipe1
+        write(pipe1[1], buffer, strlen(buffer) + 1);
+        close(pipe1[1]); // Close writing end of pipe1
+
+        // Read concatenated string from Process 2 via pipe2
+        read(pipe2[0], buffer, BUFFER_SIZE);
+        printf("Process 1: Received concatenated string: %s\n", buffer);
+        close(pipe2[0]); // Close reading end of pipe2
+    } else {
+        // Child Process (Process 2)
+        close(pipe1[1]); // Close writing end of pipe1
+        close(pipe2[0]); // Close reading end of pipe2
+
+        // Read string from Process 1 via pipe1
+        read(pipe1[0], buffer, BUFFER_SIZE);
+        close(pipe1[0]); // Close reading end of pipe1
+
+        // Concatenate the received string with the additional string manually
+        manual_concatenate(buffer, additional_string);
+
+        // Send the concatenated string back to Process 1 via pipe2
+        write(pipe2[1], buffer, strlen(buffer) + 1);
+        close(pipe2[1]); // Close writing end of pipe2
+    }
+
+    return 0;
+}
+
+
+
+//gcc -o process_pipe process_pipe.c
+//./process_pipe
+
+
+
+
+
+
+
+
+
+
+
+
+
+
